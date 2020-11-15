@@ -279,9 +279,16 @@ export const createRemoteMediaItemNode = async ({
 			// make sure the directory exists
 			await fs.ensureDir(path.dirname(hardCachedFilePath));
 			// copy our downloaded file to our existing directory
+			console.log(
+				'Create remote media item node: copying',
+				remoteFileNode.absolutePath
+			);
 			await fs.copyFile(remoteFileNode.absolutePath, hardCachedFilePath);
 		} catch (e) {
-			helpers.reporter.panic(e);
+			console.log('### CREATE REMOTE MEDIA ITEM PANIC ###');
+			console.log(new Error().stack);
+			console.log('### END (CREATE REMOTE MEDIA ITEM PANIC) ###');
+			// helpers.reporter.panic(e);
 		}
 	}
 
