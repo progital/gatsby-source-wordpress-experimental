@@ -1,16 +1,23 @@
 import prettier from "prettier"
 import axios from "axios"
 import rateLimit from "axios-rate-limit"
-import chalk from "chalk"
+import { bold } from "chalk"
 import { formatLogMessage } from "./format-log-message"
 import store from "~/store"
 import { getPluginOptions } from "./get-gatsby-api"
 import urlUtil from "url"
 import { CODES } from "./report"
 
-const http = rateLimit(axios.create(), {
-  maxRPS: process.env.GATSBY_CONCURRENT_DOWNLOAD || 50,
-})
+let http = null
+
+const getHttp = (limit = 50) => {
+  if (!http) {
+    http = rateLimit(axios.create(), {
+      maxRPS: limit,
+    })
+  }
+  return http
+}
 
 const handleErrorOptions = async ({
   variables,
@@ -90,19 +97,9 @@ const handleGraphQLErrors = async ({
   panicOnError,
   reporter,
   errorContext,
+  forceReportCriticalErrors = false,
 }) => {
   const pluginOptions = getPluginOptions()
-
-  if (!response) {
-    /**
-     * FIXME
-     *
-     * 1. We're logging an undefined variable here instead of a message.
-     * 2. What scenarios lead us to this point? Can we assign a code?
-     */
-    reporter.panic(response)
-    return
-  }
 
   const json = response.data
   const { errors } = json
@@ -115,7 +112,11 @@ const handleGraphQLErrors = async ({
   if (
     json &&
     json.data &&
-    pluginOptions.debug.graphql.onlyReportCriticalErrors
+    pluginOptions.debug.graphql.onlyReportCriticalErrors &&
+    // only return if we're not force disabling this.
+    // this is used when we make GraphQL requests intentionally rather than programmatically
+    // for ex during the Preview process
+    !forceReportCriticalErrors
   ) {
     return
   }
@@ -187,7 +188,7 @@ const handleGraphQLErrors = async ({
               : ``
           } \n\t ${
             error.message
-          }  \n\n Error path: ${errorPath} \n\n If you haven't already, try adding ${chalk.bold(
+          }  \n\n Error path: ${errorPath} \n\n If you haven't already, try adding ${bold(
             `define( 'GRAPHQL_DEBUG', true );`
           )} to your wp-config.php for more detailed error messages.`
         )
@@ -206,13 +207,13 @@ const handleGraphQLErrors = async ({
   })
 }
 
-const ensureStatementsAreTrue = `${chalk.bold(
+const ensureStatementsAreTrue = `${bold(
   `Please ensure the following statements are true`
 )} \n  - your WordPress URL is correct in gatsby-config.js\n  - your server is responding to requests \n  - WPGraphQL and WPGatsby are installed in your WordPress backend`
 
 // @todo add a link to docs page for debugging
 const genericError = ({ url }) =>
-  `GraphQL request to ${chalk.bold(url)} failed.\n\n${ensureStatementsAreTrue}`
+  `GraphQL request to ${bold(url)} failed.\n\n${ensureStatementsAreTrue}`
 
 const slackChannelSupportMessage = `If you're still having issues, please visit https://www.wpgraphql.com/community-and-support/\nand follow the link to join the WPGraphQL Slack.\nThere are a lot of folks there in the #gatsby channel who are happy to help with debugging.`
 
@@ -239,7 +240,7 @@ const handleFetchErrors = async ({
   })
 
   if (e.message.includes(`timeout of ${timeout}ms exceeded`)) {
-    reporter.error(e)
+    reporter.error(e.message)
     reporter.panic({
       id: CODES.Timeout,
       context: {
@@ -249,6 +250,36 @@ const handleFetchErrors = async ({
           } seconds).\n\nEither your URL is wrong, you need to increase server resources, or you need to decrease the amount of resources each request takes.\n\nYou can configure how much resources each request takes by lowering your \`options.schema.perPage\` value from the default of 100 nodes per request.\nAlternatively you can increase the request timeout by setting a value in milliseconds to \`options.schema.timeout\`, the current setting is ${timeout}.\n\n${genericError(
             { url }
           )}`,
+          { useVerboseStyle: true }
+        ),
+      },
+    })
+  }
+  if (e.message.includes(`Request failed with status code 50`)) {
+    reporter.error(e)
+    reporter.panic({
+      id: CODES.WordPress500ishError,
+      context: {
+        sourceMessage: formatLogMessage(
+          [
+            `Your wordpress server at ${bold(url)} appears to be overloaded.`,
+            `\nYou might try reducing the ${bold(
+              `requestConcurrency`
+            )} for content:`,
+            `\n{
+  resolve: 'gatsby-source-wordpress-experimental',
+  options: {
+    schema: {
+      requestConcurrency: 25
+    }
+  },
+}`,
+            `\nnote that ${bold(
+              `GATSBY_CONCURRENT_REQUEST`
+            )} environment variable has been retired for this option and ${bold(
+              `schema.requestConcurrency`
+            )}`,
+          ],
           { useVerboseStyle: true }
         ),
       },
@@ -333,6 +364,7 @@ ${slackChannelSupportMessage}`
   const responseReturnedHtml = response?.headers[`content-type`].includes(
     `text/html;`
   )
+  const limit = pluginOptions?.schema?.requestConcurrency
 
   if (responseReturnedHtml && isFirstRequest) {
     const requestOptions = {
@@ -346,7 +378,7 @@ ${slackChannelSupportMessage}`
     try {
       const urlWithoutTrailingSlash = url.replace(/\/$/, ``)
 
-      const response = await http.post(
+      const response = await getHttp(limit).post(
         [urlWithoutTrailingSlash, `/graphql`].join(``),
         { query, variables },
         requestOptions
@@ -364,11 +396,11 @@ ${slackChannelSupportMessage}`
             sourceMessage: formatLogMessage(
               `${
                 errorContext ? `${errorContext}` : ``
-              }\n\nThe supplied url ${chalk.bold(
+              }\n\nThe supplied url ${bold(
                 urlWithoutTrailingSlash
-              )} is invalid,\nhowever ${chalk.bold(
+              )} is invalid,\nhowever ${bold(
                 urlWithoutTrailingSlash + `/graphql`
-              )} works!\n\nFor this plugin to consume the wp-graphql schema, you'll need to specify the full URL\n(${chalk.bold(
+              )} works!\n\nFor this plugin to consume the wp-graphql schema, you'll need to specify the full URL\n(${bold(
                 urlWithoutTrailingSlash + `/graphql`
               )}) in your gatsby-config.\n\nYou can learn more about configuring the source plugin URL here:\n${docsLink}\n\n`
             ),
@@ -399,7 +431,7 @@ ${slackChannelSupportMessage}`
           } \n\nReceived HTML as a response. Are you sure ${url} is the correct URL?\n\nIf that URL redirects to the correct URL via WordPress in the browser,\nor you've entered the wrong URL in settings,\nyou might receive this error.\nVisit that URL in your browser, and if it looks good, copy/paste it from your URL bar to your config.\n\n${ensureStatementsAreTrue}${
             copyHtmlResponseOnError
               ? `\n\nCopied HTML response to your clipboard.`
-              : `\n\n${chalk.bold(
+              : `\n\n${bold(
                   `Further debugging`
                 )}\nIf you still receive this error after following the steps above, this may be a problem with your WordPress instance.\nA plugin or theme may be adding additional output for some posts or pages.\nAdd the following plugin option to copy the html response to your clipboard for debugging.\nYou can paste the response into an html file to see what's being returned.\n
 {
@@ -481,8 +513,10 @@ const fetchGraphql = async ({
   headers = {},
   errorContext = false,
   isFirstRequest = false,
+  forceReportCriticalErrors = false,
 }) => {
   const { helpers, pluginOptions } = store.getState().gatsbyApi
+  const limit = pluginOptions?.schema?.requestConcurrency
 
   const { url: pluginOptionsUrl } = pluginOptions
   let { reporter } = helpers
@@ -519,7 +553,11 @@ const fetchGraphql = async ({
       requestOptions.auth = htaccessCredentials
     }
 
-    response = await http.post(url, { query, variables }, requestOptions)
+    response = await getHttp(limit).post(
+      url,
+      { query, variables },
+      requestOptions
+    )
 
     if (response.data === ``) {
       throw new Error(`GraphQL request returned an empty string.`)
@@ -575,6 +613,7 @@ const fetchGraphql = async ({
       timeout,
       errorContext,
       isFirstRequest,
+      forceReportCriticalErrors,
     })
   }
 

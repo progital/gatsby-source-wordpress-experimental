@@ -5,6 +5,8 @@ import gql from "~/utils/gql"
 import { formatLogMessage } from "~/utils/format-log-message"
 import { LAST_COMPLETED_SOURCE_TIME, MD5_CACHE_KEY } from "~/constants"
 
+import { ensurePluginRequirementsAreMet } from "../check-plugin-requirements"
+
 import { createContentDigest } from "gatsby-core-utils"
 
 import {
@@ -15,10 +17,10 @@ import {
   getPersistentCache,
 } from "~/utils/cache"
 
-const checkIfSchemaHasChanged = async (_, pluginOptions) => {
+const checkIfSchemaHasChanged = async ({ traceId }) => {
   const state = store.getState()
 
-  const { helpers } = state.gatsbyApi
+  const { helpers, pluginOptions } = state.gatsbyApi
 
   const lastCompletedSourceTime = await helpers.cache.get(
     LAST_COMPLETED_SOURCE_TIME
@@ -84,6 +86,22 @@ Please consider addressing this issue by changing your WordPress settings or plu
 
   const schemaWasChanged = schemaMd5 !== cachedSchemaMd5
 
+  // if the schema was changed and we had a cached schema
+  // we need to re-check to see if all plugin requirements are met
+  // this is also run as a step in gatsby-node.js but is skipped
+  // during refreshes. If the schema changes and this is a refresh
+  // we do want to re-check to make sure everything's good.
+  if (
+    schemaWasChanged &&
+    cachedSchemaMd5 &&
+    traceId !== `initial-createSchemaCustomization`
+  ) {
+    await ensurePluginRequirementsAreMet({
+      ...helpers,
+      traceId: `schemaWasChanged`,
+    })
+  }
+
   const pluginOptionsMD5Key = `plugin-options-md5`
   const lastPluginOptionsMD5 = await getPersistentCache({
     key: pluginOptionsMD5Key,
@@ -113,10 +131,18 @@ Please consider addressing this issue by changing your WordPress settings or plu
   ) {
     helpers.reporter.log(``)
     helpers.reporter.warn(
-      formatLogMessage(
-        `The remote schema has changed since the last build, re-fetching all data`
-      )
+      formatLogMessage(`The remote schema has changed, updating local schema.`)
     )
+    if (
+      process.env.NODE_ENV === `development` &&
+      !process.env.ENABLE_GATSBY_REFRESH_ENDPOINT
+    ) {
+      helpers.reporter.warn(
+        formatLogMessage(
+          `If the schema change includes a data change\nyou'll need to run \`gatsby clean && gatsby develop\` to see the data update.`
+        )
+      )
+    }
     helpers.reporter.info(
       formatLogMessage(`Cached schema md5: ${cachedSchemaMd5}`)
     )

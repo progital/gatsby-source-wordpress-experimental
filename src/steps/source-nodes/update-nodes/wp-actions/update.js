@@ -37,7 +37,7 @@ const normalizeUri = ({ uri, id, singleName }) => {
   if (uri?.startsWith(`/?`)) {
     const dbId = getDbIdFromRelayId(id)
 
-    return `/${singleName}/${dbId}/`
+    return `/generated-preview-path/${singleName}/${dbId}/`
   }
 
   return uri
@@ -51,29 +51,38 @@ export const fetchAndCreateSingleNode = async ({
   isNewPostDraft,
   isDraft,
   previewId = null,
+  previewParentId = null,
   token = null,
+  isPreview = false,
 }) => {
-  const { nodeQuery, previewQuery } =
-    getQueryInfoBySingleFieldName(singleName) || {}
+  function getNodeQuery() {
+    const { nodeQuery, previewQuery } =
+      getQueryInfoBySingleFieldName(singleName) || {}
 
-  // if this is a preview use the preview query
-  // if it's a preview but it's the initial blank node
-  // then use the regular node query as the preview query wont
-  // return anything
-  const query =
-    previewId && !isNewPostDraft && !isDraft ? previewQuery : nodeQuery
+    // if this is a preview use the preview query
+    // if it's a preview but it's the initial blank node
+    // then use the regular node query as the preview query wont
+    // return anything
+    const query = isPreview && !isDraft ? previewQuery : nodeQuery
 
-  const {
-    helpers: { reporter },
-  } = getGatsbyApi()
+    return query
+  }
+
+  const query = getNodeQuery()
+
+  const { helpers } = getGatsbyApi()
+
+  const { reporter } = helpers
 
   if (!query) {
+    // try fetching the query before failing
+    // this post type may have been added to WP while Gatsby was already running
+    reporter.log(``)
     reporter.info(
       formatLogMessage(
-        `A ${singleName} was updated, but this node type is excluded in plugin options.`
+        `A ${singleName} was updated, but no query was found for this node type. This node type is either excluded in plugin options or this is a bug.`
       )
     )
-    reporter.log(``)
     return { node: null }
   }
 
@@ -124,6 +133,10 @@ export const fetchAndCreateSingleNode = async ({
     id,
   })
 
+  if (previewParentId) {
+    remoteNode.databaseId = previewParentId
+  }
+
   data[singleName] = remoteNode
 
   // returns an object
@@ -135,19 +148,11 @@ export const fetchAndCreateSingleNode = async ({
     cachedNodeIds,
   })
 
-  if (previewId && !isNewPostDraft) {
+  if (previewId) {
     reporter.log(``)
     reporter.info(
       formatLogMessage(
-        `Preview for ${singleName} ${previewId} was updated at ${node.uri}.`
-      )
-    )
-    reporter.log(``)
-  } else if (isNewPostDraft) {
-    reporter.log(``)
-    reporter.info(
-      formatLogMessage(
-        `Blank node for ${singleName} draft ${previewId} was created at ${node.uri}.`
+        `Preview for ${singleName} ${node.id} ${previewId} was updated.`
       )
     )
     reporter.log(``)
@@ -277,11 +282,7 @@ export const createSingleNode = async ({
   return { additionalNodeIds, node: remoteNode }
 }
 
-const wpActionUPDATE = async ({
-  helpers,
-  wpAction,
-  // intervalRefetching,
-}) => {
+const wpActionUPDATE = async ({ helpers, wpAction }) => {
   const reportUpdate = ({ setAction } = {}) => {
     const actionType = setAction || wpAction.actionType
 

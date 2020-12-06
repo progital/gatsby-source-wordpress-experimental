@@ -32,10 +32,7 @@ export function pluginOptionsSchema({ Joi }) {
         ),
     })
 
-  return Joi.object({
-    url: Joi.string()
-      .required()
-      .description(`The full url of your GraphQL endpoint`),
+  const joiSchema = Joi.object({
     verbose: Joi.boolean()
       .default(true)
       .description(`Wether there will be verbose output in the terminal`),
@@ -96,7 +93,7 @@ export function pluginOptionsSchema({ Joi }) {
     develop: Joi.object({
       nodeUpdateInterval: Joi.number()
         .integer()
-        .default(300)
+        .default(5000)
         .description(
           `Specifies in milliseconds how often Gatsby will ask WP if data has changed during development. If you want to see data update in near-realtime while you're developing, set this low. Your server may have trouble responding to too many requests over a long period of time and in that case, set this high. Setting it higher saves electricity too ⚡️🌲`
         ),
@@ -154,6 +151,12 @@ export function pluginOptionsSchema({ Joi }) {
         .default(100)
         .description(
           `The number of nodes to fetch per page during node sourcing.`
+        ),
+      requestConcurrency: Joi.number()
+        .integer()
+        .default(15)
+        .description(
+          `The number of concurrent GraphQL requests to make at any time during node sourcing. Try lowering this if WordPress server crashes on import`
         ),
     }).description(
       `Options related to fetching and ingesting the remote schema.`
@@ -229,10 +232,28 @@ export function pluginOptionsSchema({ Joi }) {
             .description(
               `Allows preventing the download of files that are above a certain file size (in bytes).`
             ),
+          requestConcurrency: Joi.number()
+            .integer()
+            .default(100)
+            .description(
+              `Amount of images to download concurrently. Try lowering this if wordpress server crashes on import`
+            ),
         }),
       }),
     })
       .pattern(Joi.string(), getTypeOptions())
       .description(`Options related to specific types in the remote schema.`),
+  })
+
+  return joiSchema.append({
+    url: Joi.string()
+      .required()
+      .description(`The full url of your GraphQL endpoint`),
+    presets: Joi.array()
+      .items(joiSchema)
+      .allow(null)
+      .description(
+        `A preset of plugin options to be applied under some circumstance determined by the useIf function property.`
+      ),
   })
 }
